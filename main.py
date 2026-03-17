@@ -115,7 +115,7 @@ def _filter_df_by_period(df: pd.DataFrame, period_key: str) -> pd.DataFrame:
     mapping = {"1mo": 30, "3mo": 90, "6mo": 180, "1y": 365, "5y": 365 * 5}
     start = df.index.max() - timedelta(days=mapping.get(period_key, 365))
     return df.loc[df.index >= start]
-
+# main function
 def main() -> None:
     st.set_page_config(page_title="Gemini-Quant v4.0", layout="wide", initial_sidebar_state="expanded")
     
