@@ -1,0 +1,333 @@
+{
+  "watchlist": [
+    "NVDA",
+    "TSM",
+    "GOOG",
+    "VT",
+    "VXUS",
+    "QQQ",
+    "SMH",
+    "SNPS",
+    "LEU",
+    "UUUU",
+    "TSLA"
+  ],
+  "portfolio": {
+    "NVDA": {
+      "transactions": [
+        {
+          "date": "2025-05-05",
+          "type": "buy",
+          "price": 114.01,
+          "shares": 8.7796
+        },
+        {
+          "date": "2025-05-14",
+          "type": "buy",
+          "price": 134.3,
+          "shares": 10.0
+        },
+        {
+          "date": "2025-05-23",
+          "type": "buy",
+          "price": 131.7,
+          "shares": 5.0
+        },
+        {
+          "date": "2025-06-05",
+          "type": "sell",
+          "price": 141.25,
+          "shares": 5.0
+        },
+        {
+          "date": "2025-08-07",
+          "type": "sell",
+          "price": 178.45,
+          "shares": 9.0
+        },
+        {
+          "date": "2026-11-25",
+          "type": "buy",
+          "price": 170.5,
+          "shares": 2.0
+        }
+      ]
+    },
+    "VT": {
+      "transactions": [
+        {
+          "date": "2026-03-13",
+          "type": "buy",
+          "price": 140.5,
+          "shares": 2.0
+        },
+        {
+          "date": "2025-09-25",
+          "type": "buy",
+          "price": 136.21,
+          "shares": 2.9366
+        },
+        {
+          "date": "2025-08-25",
+          "type": "buy",
+          "price": 134.11,
+          "shares": 2.237
+        },
+        {
+          "date": "2025-08-16",
+          "type": "buy",
+          "price": 133.87,
+          "shares": 7.47
+        },
+        {
+          "date": "2025-07-25",
+          "type": "buy",
+          "price": 131.49,
+          "shares": 2.28
+        },
+        {
+          "date": "2025-06-25",
+          "type": "buy",
+          "price": 126.48,
+          "shares": 2.3717
+        },
+        {
+          "date": "2025-05-31",
+          "type": "buy",
+          "price": 122.4,
+          "shares": 2.45
+        },
+        {
+          "date": "2025-05-29",
+          "type": "buy",
+          "price": 123.5,
+          "shares": 5.0
+        },
+        {
+          "date": "2025-04-30",
+          "type": "buy",
+          "price": 116.19,
+          "shares": 9.0
+        }
+      ]
+    },
+    "QQQ": {
+      "transactions": [
+        {
+          "date": "2025-06-25",
+          "type": "buy",
+          "price": 542.03,
+          "shares": 0.5535
+        },
+        {
+          "date": "2025-05-31",
+          "type": "buy",
+          "price": 513.0,
+          "shares": 0.0584
+        },
+        {
+          "date": "2025-05-05",
+          "type": "buy",
+          "price": 487.65,
+          "shares": 2.0565
+        },
+        {
+          "date": "2025-05-01",
+          "type": "buy",
+          "price": 485.55,
+          "shares": 2.0595
+        },
+        {
+          "date": "2025-04-30",
+          "type": "buy",
+          "price": 467.65,
+          "shares": 2.1383
+        }
+      ]
+    },
+    "VXUS": {
+      "transactions": [
+        {
+          "date": "2026-02-27",
+          "type": "buy",
+          "price": 83.8,
+          "shares": 3.1933
+        },
+        {
+          "date": "2026-02-21",
+          "type": "sell",
+          "price": 83.15,
+          "shares": 3.0
+        },
+        {
+          "date": "2026-02-21",
+          "type": "buy",
+          "price": 83.17,
+          "shares": 5.0
+        },
+        {
+          "date": "2025-06-23",
+          "type": "buy",
+          "price": 67.085,
+          "shares": 8.0
+        }
+      ]
+    },
+    "SMH": {
+      "transactions": [
+        {
+          "date": "2026-02-27",
+          "type": "buy",
+          "price": 407.0,
+          "shares": 0.2457
+        },
+        {
+          "date": "2025-10-25",
+          "type": "buy",
+          "price": 351.7,
+          "shares": 2.0
+        },
+        {
+          "date": "2025-10-24",
+          "type": "sell",
+          "price": 351.23,
+          "shares": 1.0
+        },
+        {
+          "date": "2025-08-16",
+          "type": "buy",
+          "price": 299.36,
+          "shares": 1.67
+        },
+        {
+          "date": "2025-06-28",
+          "type": "buy",
+          "price": 278.73,
+          "shares": 2.0
+        }
+      ]
+    },
+    "GOOG": {
+      "transactions": [
+        {
+          "date": "2026-02-12",
+          "type": "buy",
+          "price": 325.1,
+          "shares": 4.6
+        },
+        {
+          "date": "2026-02-09",
+          "type": "sell",
+          "price": 325.1,
+          "shares": 4.0
+        },
+        {
+          "date": "2026-02-03",
+          "type": "buy",
+          "price": 339.27,
+          "shares": 0.589
+        },
+        {
+          "date": "2026-01-13",
+          "type": "buy",
+          "price": 330.78,
+          "shares": 2.0
+        },
+        {
+          "date": "2025-11-22",
+          "type": "sell",
+          "price": 301.14,
+          "shares": 1.0
+        },
+        {
+          "date": "2025-11-21",
+          "type": "sell",
+          "price": 305.21,
+          "shares": 1.0
+        },
+        {
+          "date": "2025-07-22",
+          "type": "buy",
+          "price": 190.71,
+          "shares": 4.0
+        }
+      ]
+    },
+    "TSM": {
+      "transactions": [
+        {
+          "date": "2026-03-03",
+          "type": "buy",
+          "price": 349.5,
+          "shares": 1.0
+        },
+        {
+          "date": "2026-03-03",
+          "type": "buy",
+          "price": 348.5,
+          "shares": 1.0
+        },
+        {
+          "date": "2026-03-02",
+          "type": "buy",
+          "price": 367.0,
+          "shares": 1.0
+        },
+        {
+          "date": "2025-12-17",
+          "type": "buy",
+          "price": 277.28,
+          "shares": 1.0
+        }
+      ]
+    },
+    "SNPS": {
+      "transactions": [
+        {
+          "date": "2026-01-05",
+          "type": "sell",
+          "price": 493.26,
+          "shares": 11.0
+        },
+        {
+          "date": "2025-08-29",
+          "type": "buy",
+          "price": 376.77,
+          "shares": 10.0
+        },
+        {
+          "date": "2025-02-28",
+          "type": "buy",
+          "price": 388.69,
+          "shares": 11.0
+        },
+        {
+          "date": "2024-08-30",
+          "type": "buy",
+          "price": 441.64,
+          "shares": 7.0
+        }
+      ]
+    },
+    "LEU": {
+      "transactions": [
+        {
+          "date": "2026-03-05",
+          "type": "buy",
+          "price": 197.0,
+          "shares": 1.0
+        }
+      ]
+    },
+    "UUUU": {
+      "transactions": [
+        {
+          "date": "2026-03-05",
+          "type": "buy",
+          "price": 20.5,
+          "shares": 3.0
+        }
+      ]
+    }
+  }
+}

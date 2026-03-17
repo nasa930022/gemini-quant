@@ -1,0 +1,18 @@
+# Python 產生的編譯檔案
+__pycache__/
+
+# 虛擬環境
+venv/
+.env
+
+# 理財數據檔案 (避免上傳幾百 MB 的歷史數據)
+*.csv
+*.xlsx
+*.json
+analytics_db/
+
+# 舊版本數據資料
+historical_code_dont_modify/
+# 敏感金鑰檔案
+config.json
+test_dataprocess.py
