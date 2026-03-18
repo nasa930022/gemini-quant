@@ -10,6 +10,7 @@ venv/
 *.xlsx
 *.json
 analytics_db/
+storage/
 
 # 舊版本數據資料
 historical_code_dont_modify/
