@@ -1,6 +1,6 @@
 """
-ArchiveManager - 依 ticker/date 管理本地 JSON 數據存儲。
-支援 WSL2 路徑相容、日誌記錄。
+ArchiveManager - 混合式存儲版 (Shared + Multi-User)
+支援中心化數據抓取與個人化蒸餾數據隔離。
 """
 
 import json
@@ -8,11 +8,11 @@ import logging
 import os
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, Union
+from typing import Optional, Union, Dict, Any
 
-# WSL2 相容：以專案根目錄為基準，確保 analytics_db 路徑正確
+# 專案根目錄設定
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
-_ROOT_DEFAULT = _PROJECT_ROOT / "analytics_db"
+_STORAGE_ROOT = _PROJECT_ROOT / "storage"
 
 logging.basicConfig(
     level=logging.INFO,
@@ -21,105 +21,134 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-
 class ArchiveManager:
     """
-    依 ticker / date 組織的本地 JSON 存儲管理員。
-    預設根目錄：/home/nasa/work/investment/analytics_db/
+    儲存結構：
+    storage/
+    ├── shared/                # 中心化公用數據 (所有使用者共用)
+    │   ├── raw_data/          # 原始 yfinance CSV (e.g., AAPL_2026-03-18.csv)
+    │   └── indicators/        # 標準化技術指標 (e.g., AAPL_common.json)
+    └── users/                 # 個人化私有數據 (使用者隔離)
+        └── {username}/
+            ├── profiles/      # strategy.json (風險、風格、API Key)
+            ├── portfolio/     # transactions.json (交易紀錄、觀察清單)
+            ├── reports/       # {TICKER}/{DATE}/ AI 分析報告
+            └── cache/         # 根據個人策略蒸餾後的數據 (e.g., AAPL_distilled.json)
     """
 
     def __init__(self, root: Union[str, Path, None] = None):
-        self.root = Path(root) if root else _ROOT_DEFAULT
-        self.root.mkdir(parents=True, exist_ok=True)
-        logger.info("ArchiveManager 已初始化，根路徑: %s", self.root)
+        self.root = Path(root) if root else _STORAGE_ROOT
+        self.shared_base = self.root / "shared"
+        self.users_base = self.root / "users"
+        
+        # 初始化基礎目錄
+        for p in [self.shared_base, self.users_base]:
+            p.mkdir(parents=True, exist_ok=True)
+            
+        logger.info("ArchiveManager 初始化成功，儲存根路徑: %s", self.root)
 
-    def get_path(self, ticker: str, date: Union[str, datetime]) -> Path:
+    # --- 中心化數據路徑 (Shared Layer) ---
+
+    def get_shared_path(self, category: str, ticker: str = "") -> Path:
         """
-        依 ticker 和 date 取得/建立資料夾路徑。
-        date 可為 'YYYY-MM-DD' 或 datetime。
+        取得公用數據路徑。
+        category: 'raw_data' 或 'indicators'
         """
+        path = self.shared_base / category
+        if ticker:
+            path = path / ticker.upper()
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    # --- 個人化數據路徑 (User Layer) ---
+
+    def get_user_dir(self, username: str, category: str = "") -> Path:
+        """取得特定使用者的分類目錄。範例：storage/users/nasa/cache"""
+        user_path = self.users_base / username.lower()
+        target_path = user_path / category if category else user_path
+        target_path.mkdir(parents=True, exist_ok=True)
+        return target_path
+
+    def get_report_path(self, username: str, ticker: str, date: Union[str, datetime]) -> Path:
+        """取得 AI 報告的特定日期資料夾。"""
         if isinstance(date, datetime):
             date = date.strftime("%Y-%m-%d")
+        
+        base = self.get_user_dir(username, "reports")
         ticker_clean = str(ticker).upper().replace("/", "_")
-        folder = self.root / ticker_clean / date
+        folder = base / ticker_clean / date
         folder.mkdir(parents=True, exist_ok=True)
         return folder
 
-    def _filepath(self, ticker: str, date: Union[str, datetime], filename: str) -> Path:
-        base = self.get_path(ticker, date)
-        # 若已帶副檔名則直接使用，否則預設為 .json
-        name = filename if "." in filename else f"{filename}.json"
-        return base / name
+    # --- 通用讀寫介面 ---
 
-    def save_json(
-        self,
-        ticker: str,
-        date: Union[str, datetime],
-        filename: str,
-        data: dict,
-    ) -> Path:
-        """將 dict 存成格式化的 JSON 檔。"""
-        fp = self._filepath(ticker, date, filename)
+    def _build_filepath(self, 
+                        is_shared: bool, 
+                        username: str, 
+                        category: str, 
+                        filename: str, 
+                        ticker: str = "", 
+                        date: Union[str, datetime] = "") -> Path:
+        """內部工具：根據類型與使用者生成完整檔案路徑。"""
+        if is_shared:
+            base = self.get_shared_path(category, ticker)
+        elif category == "reports":
+            base = self.get_report_path(username, ticker, date)
+        else:
+            base = self.get_user_dir(username, category)
+            
+        # 確保檔名包含副檔名
+        ext = ".json" if category != "raw_data" else ".csv"
+        if "." not in filename:
+            filename += ext
+        return base / filename
+
+    def save_json(self, username: str, category: str, filename: str, data: Dict, 
+                  is_shared: bool = False, ticker: str = "", date: Union[str, datetime] = "") -> Path:
+        fp = self._build_filepath(is_shared, username, category, filename, ticker, date)
         with open(fp, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
-        logger.info("已寫入: %s", fp)
         return fp
 
-    def load_json(
-        self,
-        ticker: str,
-        date: Union[str, datetime],
-        filename: str,
-    ) -> Optional[dict]:
-        """讀取指定 JSON，若不存在則回傳 None。"""
-        fp = self._filepath(ticker, date, filename)
+    def load_json(self, username: str, category: str, filename: str, 
+                  is_shared: bool = False, ticker: str = "", date: Union[str, datetime] = "") -> Optional[Dict]:
+        fp = self._build_filepath(is_shared, username, category, filename, ticker, date)
         if not fp.exists():
-            logger.debug("檔案不存在: %s", fp)
             return None
         try:
             with open(fp, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            logger.info("已讀取: %s", fp)
-            return data
-        except (json.JSONDecodeError, IOError) as e:
-            logger.warning("讀取失敗 %s: %s", fp, e)
+                return json.load(f)
+        except Exception as e:
+            logger.error(f"讀取 JSON 失敗 {fp}: {e}")
             return None
 
-    def exists(self, ticker: str, date: Union[str, datetime], filename: str) -> bool:
-        """檢查該數據檔是否已存在，可用於數據復用判斷。"""
-        fp = self._filepath(ticker, date, filename)
-        return fp.exists()
-
-    def save_text(
-        self,
-        ticker: str,
-        date: Union[str, datetime],
-        filename: str,
-        text: str,
-    ) -> Path:
-        """以 UTF-8 儲存任意文字檔（例如 Markdown 報告）。"""
-        fp = self._filepath(ticker, date, filename)
-        with open(fp, "w", encoding="utf-8") as f:
-            f.write(text)
-        logger.info("已寫入文字檔: %s", fp)
+    def save_text(self, username: str, category: str, filename: str, text: str, 
+                  ticker: str = "", date: Union[str, datetime] = "") -> Path:
+        fp = self._build_filepath(False, username, category, filename, ticker, date)
+        fp.write_text(text, encoding="utf-8")
         return fp
 
-    def load_text(
-        self,
-        ticker: str,
-        date: Union[str, datetime],
-        filename: str,
-    ) -> Optional[str]:
-        """讀取文字檔，若不存在則回傳 None。"""
-        fp = self._filepath(ticker, date, filename)
-        if not fp.exists():
-            logger.debug("文字檔不存在: %s", fp)
-            return None
-        try:
-            with open(fp, "r", encoding="utf-8") as f:
-                data = f.read()
-            logger.info("已讀取文字檔: %s", fp)
-            return data
-        except IOError as e:
-            logger.warning("讀取文字檔失敗 %s: %s", fp, e)
-            return None
+    def load_text(self, username: str, category: str, filename: str, 
+                  ticker: str = "", date: Union[str, datetime] = "") -> Optional[str]:
+        fp = self._build_filepath(False, username, category, filename, ticker, date)
+        return fp.read_text(encoding="utf-8") if fp.exists() else None
+
+    # --- 使用者策略與投資組合專用介面 ---
+
+    def load_strategy(self, username: str) -> Dict[str, Any]:
+        """讀取使用者策略，若不存在則回傳預設模板。"""
+        strategy = self.load_json(username, "profiles", "strategy")
+        if strategy:
+            return strategy
+        
+        # 預設策略模板
+        return {
+            "risk_tolerance": "一般",    # 高 / 一般 / 低
+            "trading_style": "一般",     # 激進 / 一般 / 保守
+            "trading_frequency": "長期", # 短線 / 長期
+            "gemini_api_key": ""
+        }
+
+    def save_strategy(self, username: str, strategy_data: Dict):
+        """儲存使用者策略。"""
+        return self.save_json(username, "profiles", "strategy", strategy_data)

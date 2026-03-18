@@ -1,168 +1,220 @@
 """
-股票數據處理模組：從 yfinance 抓取數據，計算技術指標並進行多尺度蒸餾。
-優化版：支援輕量化價格查詢與數據快取機制。
+dataprocess.py - Project Gemini-Quant v4.0 (Personalized Edition)
+功能：
+1. 共享數據層 (Shared Layer)：中心化儲存原始歷史 CSV，節省 API 額度。
+2. 冷熱數據分離：保護歷史資料不被更動，僅動態抓取並合併今日即時走勢。
+3. 個人化蒸餾 (Personalized Distillation)：
+   - 風險導向：針對不同風險承受度計算回撤與波動率。
+   - 風格分流：為「一般」風格提供平衡指標，為「激進/保守」提供專屬訊號。
 """
 
-from datetime import datetime, timedelta
-from typing import Optional, Tuple
+import logging
+from datetime import datetime
+from typing import Optional, Tuple, Dict, Any
 
 import pandas as pd
 import pandas_ta as ta
 import yfinance as yf
 
-from utils import ArchiveManager
+from utils.archive import ArchiveManager
 
-# yfinance 正確的 period 格式
-_PERIOD_MAP = {"1m": "1mo", "3m": "3mo", "6m": "6mo", "1y": "1y", "5y": "5y"}
+# 初始化日誌與存儲管理
+logger = logging.getLogger(__name__)
 _ARCHIVE = ArchiveManager()
-
-def get_price_info(ticker: str) -> dict:
-    """
-    輕量化價格獲取：僅用於資產總覽。
-    不計算技術指標，不寫入檔案，僅回傳當前市價與昨收價。
-    """
-    try:
-        # 僅抓取 5 天數據以確保能拿到最後兩個交易日的收盤價
-        data = yf.download(ticker, period="5d", interval="1d", progress=False, threads=False)
-        if data.empty:
-            return {"current": 0.0, "prev_close": 0.0}
-        
-        # 處理 MultiIndex 並取得最後兩筆收盤價
-        close_series = data['Close']
-        if isinstance(close_series, pd.DataFrame):
-            close_series = close_series.iloc[:, 0]
-            
-        current_price = float(close_series.iloc[-1])
-        prev_close = float(close_series.iloc[-2]) if len(close_series) > 1 else current_price
-        
-        return {"current": current_price, "prev_close": prev_close}
-    except Exception:
-        return {"current": 0.0, "prev_close": 0.0}
 
 def get_stock_data(
     ticker: str,
-    period: str = "6mo",
-    force_refresh: bool = True
-) -> Tuple[Optional[pd.DataFrame], Optional[str], Optional[float]]:
+    username: str,
+    force_refresh: bool = False
+) -> Tuple[Optional[pd.DataFrame], Optional[Dict]]:
     """
-    抓取完整數據並計算指標。
-    force_refresh=True: 用於當前分析個股，必抓最新。
-    force_refresh=False: 用於背景計算，若今日已有蒸餾 JSON 則直接返回，不重複抓取。
+    主進入點：獲取合併數據、計算指標並執行個人化蒸餾。
     """
-    ui_period = _PERIOD_MAP.get(period, period)
-    as_of_str = datetime.now().strftime("%Y-%m-%d")
-    filename = f"distilled_{ui_period}"
+    ticker = ticker.upper()
+    
+    # 1. 獲取合併後的完整數據 (歷史 + 今日即時)
+    df = _fetch_and_merge_data(ticker, force_refresh)
+    if df is None or df.empty:
+        logger.error(f"無法取得 {ticker} 的數據")
+        return None, None
 
-    # 非強制更新時，先檢查本地快取
-    if not force_refresh:
-        cached_distilled = _ARCHIVE.load_json(ticker, as_of_str, filename)
-        if cached_distilled:
-            # 注意：這裡只返回 None 作為 DF，因為背景計算通常不需要完整圖表 DF
-            # 若需要 DF 則需另存 raw_data.csv，此處簡化處理為「僅在分析時抓取 DF」
-            return None, ticker, None
+    # 2. 計算標準技術指標 (中心化計算，供所有使用者共用)
+    df = compute_indicators(df)
 
+    # 3. 獲取使用者個人策略 (從 storage/users/{username}/profiles/strategy.json)
+    strategy = _ARCHIVE.load_strategy(username)
+
+    # 4. 執行個人化蒸餾 (根據使用者風險與風格裁切數據)
+    distilled = get_personalized_distillation(df, strategy)
+
+    # 5. 存儲蒸餾結果到使用者私有快取 (storage/users/{username}/cache/)
+    _ARCHIVE.save_json(
+        username=username,
+        category="cache",
+        filename=f"{ticker}_distilled",
+        data=distilled
+    )
+
+    return df, distilled
+
+def _fetch_and_merge_data(ticker: str, force_refresh: bool) -> Optional[pd.DataFrame]:
+    """
+    冷熱分離邏輯：
+    - 冷數據：讀取 shared/raw_data/{ticker}/history.csv
+    - 熱數據：抓取今日最新 1d 數據
+    - 優點：不動先前資料，確保歷史數據穩定性。
+    """
+    shared_dir = _ARCHIVE.get_shared_path("raw_data", ticker)
+    history_file = shared_dir / "history.csv"
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    
+    # A. 讀取或初始化歷史數據
+    df_hist = pd.DataFrame()
+    if history_file.exists() and not force_refresh:
+        try:
+            df_hist = pd.read_csv(history_file, index_col=0, parse_dates=True)
+            # 確保歷史數據不包含「未收盤」的今日
+            df_hist = df_hist[df_hist.index < today_str]
+        except Exception as e:
+            logger.warning(f"歷史檔案讀取失敗，將重新抓取: {e}")
+
+    # B. 若無歷史數據，抓取過去兩年並存檔
+    if df_hist.empty:
+        logger.info(f"正在建立 {ticker} 的中心化歷史數據庫...")
+        df_hist = yf.download(ticker, period="2y", interval="1d", progress=False)
+        df_hist = _flatten_columns(df_hist)
+        if not df_hist.empty:
+            df_hist.to_csv(history_file)
+        return df_hist
+
+    # C. 抓取今日即時熱數據 (僅 1d)
     try:
-        # 抓取 1 年數據以確保 MA200 等長期指標
-        df = yf.download(
-            ticker,
-            period="1y",
-            interval="1d",
-            auto_adjust=False,
-            progress=False,
-            threads=False,
-        )
-
-        if df is None or df.empty:
-            return None, f"無法取得 {ticker} 的數據", None
-
-        df = _flatten_columns(df)
-        if "Close" not in df.columns:
-            return None, "數據欄位錯誤", None
-
-        # 計算技術指標
-        df = compute_indicators(df)
-
-        # 獲取名稱與現價
-        stock = yf.Ticker(ticker)
-        # 為了效能，優先從 DF 拿最後一筆，不呼叫昂貴的 stock.info
-        name = ticker 
-        current_price = float(df["Close"].iloc[-1])
-
-        # 執行數據蒸餾並落地
-        distilled = get_distilled_data(df)
-        _ARCHIVE.save_json(ticker, df.index[-1].strftime("%Y-%m-%d"), filename, distilled)
-
-        return df, name, current_price
-
+        df_today = yf.download(ticker, period="1d", interval="1d", progress=False)
+        df_today = _flatten_columns(df_today)
+        
+        if not df_today.empty:
+            # 移除歷史中重疊的日期，以今日最新數據為準
+            df_hist = df_hist[df_hist.index < df_today.index[0]]
+            df_final = pd.concat([df_hist, df_today])
+            return df_final
     except Exception as e:
-        return None, str(e), None
+        logger.warning(f"無法獲取今日即時數據: {e}")
+        return df_hist
 
-def _flatten_columns(df: pd.DataFrame) -> pd.DataFrame:
-    if not isinstance(df.columns, pd.MultiIndex):
-        return df
-    df = df.copy()
-    for i in range(df.columns.nlevels):
-        lev = df.columns.get_level_values(i)
-        if "Close" in lev:
-            df.columns = lev
-            return df
-    df.columns = df.columns.get_level_values(0)
-    return df
+    return df_hist
+
+def get_personalized_distillation(df: pd.DataFrame, strategy: dict) -> dict:
+    """
+    個人化蒸餾核心邏輯：
+    1. 針對「一般」風格提供黃金平衡指標。
+    2. 整合「風險承受度」進行最大回撤與安全性分析。
+    """
+    horizon = strategy.get("trading_frequency", "長期")
+    style = strategy.get("trading_style", "一般")
+    risk = strategy.get("risk_tolerance", "一般")
+    
+    last = df.iloc[-1]
+    
+    # --- 1. 全域風險量化 (Risk Metrics) ---
+    rolling_max = df["Close"].rolling(window=252, min_periods=1).max()
+    drawdown = (df["Close"] - rolling_max) / rolling_max
+    current_dd = float(drawdown.iloc[-1])
+
+    distilled = {
+        "user_context": {"horizon": horizon, "style": style, "risk": risk},
+        "price_info": {
+            "current": float(last["Close"]), 
+            "date": df.index[-1].strftime("%Y-%m-%d")
+        },
+        "risk_assessment": {
+            "max_drawdown_252d_pct": round(current_dd * 100, 2),
+            "risk_status": "警告：處於高回撤區間" if current_dd < -0.20 else "正常"
+        }
+    }
+
+    # 根據「風險承受度」深化數據
+    if risk == "低":
+        distilled["risk_assessment"].update({
+            "ann_volatility": round(float(df["Close"].pct_change().tail(252).std() * (252**0.5)) * 100, 2),
+            "safety_margin_ma200": round(((float(last["Close"]) - float(last["MA200"])) / float(last["MA200"])) * 100, 2)
+        })
+    elif risk == "高":
+        distilled["risk_assessment"].update({
+            "upside_potential_to_52w_high": round(((df["High"].tail(252).max() - float(last["Close"])) / float(last["Close"])) * 100, 2)
+        })
+
+    # --- 2. 風格導向特徵 (Strategy Focus) ---
+    view_days = 20 if horizon == "短線" else 252
+    sub_df = df.tail(view_days)
+
+    if style == "激進":
+        distilled["strategy_focus"] = {
+            "mode": "Momentum_Aggressive",
+            "rsi14": round(float(last["RSI14"]), 2) if pd.notna(last.get("RSI14")) else "N/A",
+            "bb_position": round((float(last["Close"]) - float(last["BB_lower"])) / (float(last["BB_upper"]) - float(last["BB_lower"])), 2),
+            "ma_trend_short": "Strong_Up" if last["MA10"] > last["MA20"] else "Correcting"
+        }
+    elif style == "保守":
+        distilled["strategy_focus"] = {
+            "mode": "Stability_Conservative",
+            "above_ma200": bool(last["Close"] > last["MA200"]),
+            "volume_health": "Stable" if last["Volume"] > df["Volume"].tail(20).mean() else "Low_Volume",
+            "ma_order": "Bullish_Array" if last["MA50"] > last["MA200"] else "Neutral"
+        }
+    else:
+        # --- 安全處理 RSI 比較 ---
+        rsi_val = last.get("RSI14")
+        if pd.isna(rsi_val):
+            rsi_status = "Unknown"
+        else:
+            rsi_status = "Neutral" if 40 <= rsi_val <= 60 else ("Overbought" if rsi_val > 60 else "Oversold")
+
+        # --- 修正區塊：安全處理均線比較 (MA20 vs MA50) ---
+        ma20 = last.get("MA20")
+        ma50 = last.get("MA50")
+        
+        if pd.notna(ma20) and pd.notna(ma50):
+            trend_status = "Bullish" if ma20 > ma50 else "Neutral"
+        else:
+            trend_status = "Unknown" # 數據不足無法判斷趨勢
+
+        distilled["strategy_focus"] = {
+            "mode": "Balanced_Neutral",
+            "rsi_stability": rsi_status,
+            "price_range_pos": round((float(last["Close"]) - sub_df["Low"].min()) / (sub_df["High"].max() - sub_df["Low"].min()), 2),
+            "trend_alignment": trend_status
+        }
+
+    return distilled
 
 def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    計算標準技術指標：MA10, 20, 50, 200, BBands, RSI。
+    """
     df = df.copy()
     close = df["Close"]
+    
+    # 均線
     df["MA10"] = ta.sma(close, length=10)
     df["MA20"] = ta.sma(close, length=20)
     df["MA50"] = ta.sma(close, length=50)
     df["MA200"] = ta.sma(close, length=200)
+    
+    # 布林通道
     bb = ta.bbands(close, length=20, std=2)
     if bb is not None:
         df["BB_lower"] = bb.iloc[:, 0]
         df["BB_mid"] = bb.iloc[:, 1]
         df["BB_upper"] = bb.iloc[:, 2]
+        
+    # 強弱指標
     df["RSI14"] = ta.rsi(close, length=14)
+    
     return df
 
-def compute_summary_metrics(df: pd.DataFrame) -> dict:
-    if df is None or df.empty: return {}
-    last = df.iloc[-1]
-    d1m = df.tail(21)
-    d3m = df.tail(63)
-    return {
-        "今日開盤價": last["Open"],
-        "今日股價範圍": f"{last['Low']:.2f} - {last['High']:.2f}",
-        "震幅 (%)": round((last["High"] - last["Low"]) / last["Open"] * 100, 2) if last["Open"] else 0,
-        "一個月股價範圍": f"{d1m['Low'].min():.2f} - {d1m['High'].max():.2f}",
-        "三個月股價範圍": f"{d3m['Low'].min():.2f} - {d3m['High'].max():.2f}",
-    }
-
-def get_distilled_data(df: pd.DataFrame) -> dict:
-    if df is None or df.empty: return {}
-    df = df.dropna(subset=["Close"])
-    last = df.iloc[-1]
-    
-    # Macro
-    d52 = df.tail(252)
-    ma200 = float(last["MA200"]) if "MA200" in last and not pd.isna(last["MA200"]) else 0
-    macro = {
-        "52w_high": float(d52["High"].max()),
-        "52w_low": float(d52["Low"].min()),
-        "price_vs_ma200_pct": ((float(last["Close"]) - ma200) / ma200 * 100) if ma200 else 0,
-    }
-
-    # Meso
-    ma_order = "混合"
-    if last.get("MA10") > last.get("MA20") > last.get("MA50"): ma_order = "多頭排列"
-    elif last.get("MA10") < last.get("MA20") < last.get("MA50"): ma_order = "空頭排列"
-    
-    meso = {
-        "ma_order": ma_order,
-        "rsi_last": float(last.get("RSI14", 0)),
-    }
-
-    # Micro
-    d5 = df.tail(5)
-    micro = {"recent_5d_close": d5["Close"].tolist()}
-
-    return {"macro": macro, "meso": meso, "micro": micro}
+def _flatten_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """處理 yfinance 在多標的或新版本中產生的 MultiIndex 欄位。"""
+    if not isinstance(df.columns, pd.MultiIndex):
+        return df
+    df.columns = df.columns.get_level_values(0)
+    return df
