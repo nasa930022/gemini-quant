@@ -3,12 +3,30 @@ ArchiveManager - 混合式存儲版 (Shared + Multi-User)
 支援中心化數據抓取與個人化蒸餾數據隔離。
 """
 
+import hashlib
 import json
 import logging
 import os
+import secrets
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Union, Dict, Any
+
+# --- 密碼安全工具函式 ---
+
+def hash_password(password: str) -> str:
+    """使用 SHA-256 + 鹽值對密碼進行加鹽雜湊，回傳 'salt$hash' 格式的字串。"""
+    salt = secrets.token_hex(16)
+    pw_hash = hashlib.sha256((salt + password).encode()).hexdigest()
+    return f"{salt}${pw_hash}"
+
+def verify_password(password: str, stored_hash: str) -> bool:
+    """驗證密碼是否符合存儲的雜湊值。支援舊版明文密碼的向後相容。"""
+    # 向後相容：若沒有 '$' 分隔符，視為舊版明文密碼直接比對
+    if "$" not in stored_hash:
+        return password == stored_hash
+    salt, pw_hash = stored_hash.split("$", 1)
+    return hashlib.sha256((salt + password).encode()).hexdigest() == pw_hash
 
 # 專案根目錄設定
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent

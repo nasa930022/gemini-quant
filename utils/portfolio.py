@@ -65,8 +65,20 @@ class PortfolioManager:
         ticker = ticker.upper()
         data = self._load_user_data(username)
         
-        if ticker not in data["portfolio"]:
-            return {}
+        if ticker not in data.get("portfolio", {}):
+            return {
+                "ticker": ticker,
+                "total_shares": 0.0,
+                "avg_cost": 0.0,
+                "market_value": 0.0,
+                "inventory_cost": 0.0,
+                "cumulative_buy_cost": 0.0,
+                "unrealized_pnl": 0.0,
+                "realized_pnl": 0.0,
+                "roi_pct": 0.0,
+                "day_change_amt": 0.0,
+                "day_change_pct": 0.0
+            }
 
         transactions = data["portfolio"][ticker].get("transactions", [])
         total_shares = 0.0
@@ -179,3 +191,10 @@ class PortfolioManager:
         """讀取觀察清單。"""
         data = self._load_user_data(username)
         return data.get("watchlist", [])
+
+    def get_tracked_tickers(self, username: str) -> List[str]:
+        """取得所有需要追蹤股價的代碼 (聯集觀察清單與庫存標的)。"""
+        data = self._load_user_data(username)
+        tickers = set(data.get("watchlist", []))
+        tickers.update(data.get("portfolio", {}).keys())
+        return list(tickers)

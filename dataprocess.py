@@ -12,6 +12,7 @@ import logging
 from datetime import datetime
 from typing import Optional, Tuple, Dict, Any
 
+import concurrent.futures
 import pandas as pd
 import pandas_ta as ta
 import yfinance as yf
@@ -21,6 +22,30 @@ from utils.archive import ArchiveManager
 # 初始化日誌與存儲管理
 logger = logging.getLogger(__name__)
 _ARCHIVE = ArchiveManager()
+
+def get_latest_prices(tickers: list) -> dict:
+    """極速獲取多檔標的當前價格與昨日收盤價。專門用於優化儀表板效能，不計算技術指標。"""
+    if not tickers: return {}
+    result = {}
+    
+    def fetch(t):
+        try:
+            df = yf.Ticker(t).history(period="5d")
+            if not df.empty and "Close" in df.columns:
+                s = df["Close"].dropna()
+                if len(s) >= 2:
+                    return t, {"current": float(s.iloc[-1]), "prev_close": float(s.iloc[-2])}
+                elif len(s) == 1:
+                    return t, {"current": float(s.iloc[-1]), "prev_close": float(s.iloc[-1])}
+        except Exception as e:
+            logger.warning(f"獲取 {t} 最新報價失敗: {e}")
+        return t, None
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(10, len(tickers))) as executor:
+        for t, data in executor.map(fetch, tickers):
+            if data:
+                result[t] = data
+    return result
 
 def get_stock_data(
     ticker: str,
@@ -87,18 +112,30 @@ def _fetch_and_merge_data(ticker: str, force_refresh: bool) -> Optional[pd.DataF
             df_hist.to_csv(history_file)
         return df_hist
 
-    # C. 抓取今日即時熱數據 (僅 1d)
+    # C. 抓取近期熱數據 (從歷史紀錄最後一天到今日)
     try:
-        df_today = yf.download(ticker, period="1d", interval="1d", progress=False)
-        df_today = _flatten_columns(df_today)
+        last_date = df_hist.index.max()
+        # 修正：不只抓 1d，而是抓取從歷史結尾後的所有缺口數據
+        # yfinance 的 start 是 inclusive，我們在 concat 時處理重疊即可
+        df_recent = yf.download(ticker, start=last_date, interval="1d", progress=False)
+        df_recent = _flatten_columns(df_recent)
         
-        if not df_today.empty:
-            # 移除歷史中重疊的日期，以今日最新數據為準
-            df_hist = df_hist[df_hist.index < df_today.index[0]]
-            df_final = pd.concat([df_hist, df_today])
+        if not df_recent.empty:
+            # 移除歷史中重疊的日期，確保無缝拼接且數據唯一
+            df_hist = df_hist[df_hist.index < df_recent.index[0]]
+            df_final = pd.concat([df_hist, df_recent])
+
+            # --- 優化策略：若歷史檔案過舊 (例如超過 3 天沒更新)，更新中心化歷史庫 ---
+            from datetime import timedelta
+            if (datetime.now() - last_date).days > 3:
+                logger.info(f"正在更新 {ticker} 的歷史數據庫快取...")
+                # 將「已收盤」的數據存回歷史檔案，今日「未收盤」的不存 (以確保下次抓取仍是熱數據)
+                df_to_save = df_final[df_final.index < today_str]
+                df_to_save.to_csv(history_file)
+                
             return df_final
     except Exception as e:
-        logger.warning(f"無法獲取今日即時數據: {e}")
+        logger.warning(f"無法獲取近期即時數據: {e}")
         return df_hist
 
     return df_hist
@@ -113,7 +150,10 @@ def get_personalized_distillation(df: pd.DataFrame, strategy: dict) -> dict:
     style = strategy.get("trading_style", "一般")
     risk = strategy.get("risk_tolerance", "一般")
     
-    last = df.iloc[-1]
+    # --- 修正：安全處理空值，避免因 yfinance 開盤前空數據導致 NaN ---
+    df_valid = df.dropna(subset=["Close"])
+    if df_valid.empty: return {}
+    last = df_valid.iloc[-1]
     
     # --- 1. 全域風險量化 (Risk Metrics) ---
     rolling_max = df["Close"].rolling(window=252, min_periods=1).max()
@@ -134,9 +174,14 @@ def get_personalized_distillation(df: pd.DataFrame, strategy: dict) -> dict:
 
     # 根據「風險承受度」深化數據
     if risk == "低":
+        ma200 = last.get("MA200")
+        safety_margin = 0.0
+        if pd.notna(ma200) and ma200 > 0:
+            safety_margin = round(((float(last["Close"]) - float(ma200)) / float(ma200)) * 100, 2)
+            
         distilled["risk_assessment"].update({
             "ann_volatility": round(float(df["Close"].pct_change().tail(252).std() * (252**0.5)) * 100, 2),
-            "safety_margin_ma200": round(((float(last["Close"]) - float(last["MA200"])) / float(last["MA200"])) * 100, 2)
+            "safety_margin_ma200": safety_margin
         })
     elif risk == "高":
         distilled["risk_assessment"].update({
@@ -148,10 +193,16 @@ def get_personalized_distillation(df: pd.DataFrame, strategy: dict) -> dict:
     sub_df = df.tail(view_days)
 
     if style == "激進":
+        bb_upper = last.get("BB_upper")
+        bb_lower = last.get("BB_lower")
+        bb_position = 0.5
+        if pd.notna(bb_upper) and pd.notna(bb_lower) and float(bb_upper) != float(bb_lower):
+            bb_position = round((float(last["Close"]) - float(bb_lower)) / (float(bb_upper) - float(bb_lower)), 2)
+            
         distilled["strategy_focus"] = {
             "mode": "Momentum_Aggressive",
             "rsi14": round(float(last["RSI14"]), 2) if pd.notna(last.get("RSI14")) else "N/A",
-            "bb_position": round((float(last["Close"]) - float(last["BB_lower"])) / (float(last["BB_upper"]) - float(last["BB_lower"])), 2),
+            "bb_position": bb_position,
             "ma_trend_short": "Strong_Up" if last["MA10"] > last["MA20"] else "Correcting"
         }
     elif style == "保守":
