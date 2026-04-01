@@ -95,8 +95,9 @@ class Analyst:
                           distilled_json: dict,
                           portfolio_data: Optional[dict] = None,
                           image_path: Optional[Path] = None,
-                          api_key: Optional[str] = None) -> str:
-        """Agent A: 深度技術分析師。"""
+                          api_key: Optional[str] = None,
+                          news_data: Optional[dict] = None) -> str:
+        """Agent A: 深度技術與基本面綜合分析師。"""
         client = self._get_client(api_key)
         model_name = "gemini-3.1-flash-lite-preview"
         # model_name = "gemini-3-flash-preview"
@@ -123,8 +124,9 @@ class Analyst:
             【2. 輸入數據】
             1. 個人化蒸餾技術指標 (JSON): {json.dumps(distilled_json, indent=2, ensure_ascii=False)}
             2. 持股現況: {json.dumps(portfolio_data, indent=2, ensure_ascii=False) if portfolio_data else "目前未持倉"}
-            3. 歷史分析脈絡: {hist_ctx}
-            4. 技術分析圖表 (視覺支援): 請分析隨附的 K 線圖，辨識形態學特徵。
+            3. 新聞動能與情緒 (自本地代理蒸餾): {json.dumps(news_data, indent=2, ensure_ascii=False) if news_data else "無即時新聞數據"}
+            4. 歷史分析脈絡: {hist_ctx}
+            5. 技術分析圖表 (視覺支援): 請分析隨附的 K 線圖，辨識形態學特徵。
 
             【3. 資產配置與風險規則】
             - 標的屬性：{asset_type_desc}
@@ -140,13 +142,15 @@ class Analyst:
             評估波段特質是否符合其「{strategy['trading_style']}」風格(如震盪或動能)。
             ### 2. 核心趨勢與指標解讀 (Trend & Indicators)
             分析均線位階、RSI、布林通道與量價，並結合視覺圖表說明當前形態(如築底、高檔盤整)。
-            ### 3. 持倉成本與壓力測試 (Position Health)
+            ### 3. 市場新聞與情緒催化 (News Catalyst)
+            整合新聞提煉中的情緒分數與關鍵事件，判斷基本面催化劑對技術面是否有助燃或抑制效果。若無新聞數據請寫「目前無顯著新聞動能」。
+            ### 4. 持倉成本與壓力測試 (Position Health)
             基於成本 {portfolio_data.get('avg_cost', 'N/A') if portfolio_data else 'N/A'}，判斷乖離、背離、洗盤或轉空，建議止盈或續抱。
-            ### 4. 時序脈絡對比 (Temporal Analysis)
+            ### 5. 時序脈絡對比 (Temporal Analysis)
             若有歷史報告，對比走勢是否符合預期或突發反轉。無則略過。
-            ### 5. 資產配置再平衡建議 (Portfolio Rebalance)
+            ### 6. 資產配置再平衡建議 (Portfolio Rebalance)
             依權重 {portfolio_data.get('weight_pct', 0) if portfolio_data else 0}% 與標的屬性，判斷是否需強制減碼或加碼。
-            ### 6. 綜合行動建議 (Action Plan)
+            ### 7. 綜合行動建議 (Action Plan)
             提供具體且可執行的價格點位(買入/減碼/觀望)與下一步行動。
             """
 
