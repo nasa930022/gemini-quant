@@ -1,3 +1,3 @@
-from .archive import ArchiveManager
+from .archive import ArchiveManager, get_archive
 
-__all__ = ["ArchiveManager"]
+__all__ = ["ArchiveManager", "get_archive"]

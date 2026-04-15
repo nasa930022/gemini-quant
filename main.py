@@ -15,7 +15,7 @@ from dotenv import load_dotenv
 load_dotenv(dotenv_path=Path(__file__).parent / ".env", override=False)
 
 # 載入自定義模組
-from utils.archive import ArchiveManager, hash_password, verify_password
+from utils.archive import ArchiveManager, get_archive, hash_password, verify_password
 from utils.portfolio import PortfolioManager
 from utils.analyst import Analyst
 from views.market import render_market_dashboard
@@ -25,7 +25,7 @@ from views.portfolio_page import render_portfolio_management
 # --- 1. 基礎設定與實例初始化 ---
 st.set_page_config(page_title="Gemini-Quant v4.0", layout="wide", initial_sidebar_state="expanded")
 
-_ARCHIVE = ArchiveManager()
+_ARCHIVE = get_archive()
 _PM = PortfolioManager(_ARCHIVE)
 _ANALYST = Analyst(_ARCHIVE)
 AUTH_FILE = Path("storage/auth.json")

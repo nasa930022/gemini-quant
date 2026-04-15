@@ -170,3 +170,16 @@ class ArchiveManager:
     def save_strategy(self, username: str, strategy_data: Dict):
         """儲存使用者策略。"""
         return self.save_json(username, "profiles", "strategy", strategy_data)
+
+
+# --- Singleton 存取點 ---
+_instance: ArchiveManager | None = None
+
+def get_archive() -> ArchiveManager:
+    """取得全域唯一的 ArchiveManager 實例 (Singleton)。
+    所有模組應透過此函式取得實例，避免重複初始化與磁碟操作。
+    """
+    global _instance
+    if _instance is None:
+        _instance = ArchiveManager()
+    return _instance

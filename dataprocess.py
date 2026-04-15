@@ -17,11 +17,11 @@ import pandas as pd
 import pandas_ta as ta
 import yfinance as yf
 
-from utils.archive import ArchiveManager
+from utils.archive import get_archive
 
 # 初始化日誌與存儲管理
 logger = logging.getLogger(__name__)
-_ARCHIVE = ArchiveManager()
+_ARCHIVE = get_archive()
 
 def get_latest_prices(tickers: list) -> dict:
     """極速獲取多檔標的當前價格與昨日收盤價。專門用於優化儀表板效能，不計算技術指標。"""

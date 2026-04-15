@@ -37,6 +37,37 @@ class Analyst:
             raise RuntimeError("未提供 API Key，請在網頁輸入或於 .env 設定 GEMINI_API_KEY。")
         return genai.Client(api_key=target_key)
 
+    def _generate_with_fallback(self, client: genai.Client, contents: Union[str, list], primary_model: str) -> str:
+        """具備多層級 Fallback 與重試機制的生成函數。"""
+        # 定義模型優先級順序
+        fallbacks = [
+            "gemini-2.5-flash-lite",
+            "gemini-2.0-flash-lite",
+            "gemini-flash-latest",
+            "gemini-2.0-flash",
+            "gemini-1.5-flash"
+        ]
+        
+        # 確保 primary_model 不會在 fallbacks 中重複出現
+        models_to_try = [primary_model] + [m for m in fallbacks if m != primary_model]
+        
+        last_exception = None
+        for model in models_to_try:
+            try:
+                # logger.info(f"嘗試使用模型: {model}")
+                response = client.models.generate_content(
+                    model=model,
+                    contents=contents
+                )
+                if response and response.text:
+                    return response.text
+            except Exception as e:
+                last_exception = e
+                logger.warning(f"模型 {model} 呼叫失敗: {e}，準備嘗試下一個備援方案。")
+                continue
+        
+        raise RuntimeError(f"所有備援模型皆不可用。最後一個錯誤: {last_exception}")
+
     def _get_historical_context(self, username: str, ticker: str, as_of: datetime) -> str:
         """搜尋該使用者最近 3 個交易日的分析報告。"""
         root = self.archive.get_report_path(username, ticker, as_of).parent
@@ -165,19 +196,92 @@ class Analyst:
             contents.append(uploaded)
 
         try:
-            response = client.models.generate_content(
-                model=model_name,
-                contents=contents
-            )
-            return response.text
+            return self._generate_with_fallback(client, contents, model_name)
         except Exception as e:
-            fallback_model = "gemini-2.5-flash"
-            logger.warning(f"使用 {model_name} 失敗: {e}，自動切換至 {fallback_model}")
-            response = client.models.generate_content(
-                model=fallback_model,
-                contents=contents
+            logger.error(f"Deep Analysis 最終失敗: {e}")
+            return f"### 分析失敗\n很抱歉，AI 服務目前負載過重或發生錯誤，請稍後再試。\n錯誤訊息: {e}"
+
+    def run_news_augmentation(self,
+                              username: str,
+                              ticker: str,
+                              existing_report: str,
+                              news_data: Optional[dict] = None,
+                              api_key: Optional[str] = None) -> str:
+        """
+        Phase 2 增量更新：將新聞情緒整合到既有技術分析報告中。
+        相比 run_deep_analysis 的優勢：
+        - 不需要重新上傳圖片 (節省 files.upload() 耗時)
+        - 不需要傳入完整蒸餾數據與持倉指標 (大幅減少 input tokens)
+        - Prompt 更短更聚焦，回應更快
+        """
+        client = self._get_client(api_key)
+        model_name = "gemini-3.1-flash-lite-preview"
+
+        strategy = self.archive.load_strategy(username)
+        personality = self._get_personality_prompt(strategy)
+
+        # 從 news_data 中提取結構化摘要，只傳入高相關性內容以節省 token
+        if news_data:
+            articles = news_data.get("articles", [])
+            # 構建精簡的文章摘要 (只傳重點，不傳原始 JSON)
+            article_lines = []
+            for a in articles:
+                rel = a.get("relevance", "?")
+                senti = a.get("sentiment", "?")
+                cat = a.get("catalyst_type", "?")
+                horizon = a.get("impact_horizon", "?")
+                article_lines.append(
+                    f"- [{cat}/{horizon}] {a.get('key_point', '?')} (相關性:{rel}, 情緒:{senti})"
+                )
+            articles_text = "\n".join(article_lines) if article_lines else "無有效新聞"
+
+            catalyst = news_data.get("catalyst_breakdown", {})
+            catalyst_desc = "、".join(f"{k}({v}篇)" for k, v in catalyst.items()) if catalyst else "無分類"
+
+            news_block = (
+                f"來源: {news_data.get('source_type', '?')} | "
+                f"有效新聞: {news_data.get('relevant_count', 0)}/{news_data.get('total_fetched', 0)} 篇\n"
+                f"加權情緒: {news_data.get('aggregate_sentiment_score', 0.5)} | 催化劑分布: {catalyst_desc}\n\n"
+                f"高相關性新聞分析:\n{articles_text}\n\n"
+                f"本地代理摘要: {news_data.get('local_llm_summary', '無')}"
             )
-            return response.text
+        else:
+            news_block = "無即時新聞數據"
+
+        prompt = f"""
+            角色: 金融新聞整合編輯。標的: {ticker}
+            任務: 將最新市場新聞情緒整合到已完成的技術分析報告中，產出最終增補版本。
+
+            {personality}
+
+            【已完成的階段一技術分析報告】
+            {existing_report}
+
+            【新聞動能與情緒 (經相關性過濾與多維度分析)】
+            {news_block}
+
+            【輸出要求】
+            1. 完整保留原報告的所有章節結構與技術分析內容，不可刪減。
+            2. 將「### 3. 市場新聞與情緒催化 (News Catalyst)」章節更新為基於真實新聞數據的深度分析，需涵蓋催化劑類型、影響時間軸與情緒方向。
+            3. 若新聞情緒與技術趨勢產生矛盾，在「### 7. 綜合行動建議」中追加風險警示或修正建議。
+            4. 保持專業自然語言格式，禁用反引號(`)與JSON鍵名，關鍵指標請用**粗體**。
+            5. 直接輸出完整的更新版報告 Markdown，不要加任何前言或說明。
+            """
+
+        try:
+            return self._generate_with_fallback(client, prompt, model_name)
+        except Exception as e:
+            logger.error(f"News Augmentation 最終失敗: {e}")
+            # Fallback: 直接在原報告後附加新聞摘要，確保使用者至少能看到新聞數據
+            news_summary = news_data.get('local_llm_summary', '分析不可用') if news_data else '無新聞數據'
+            score = news_data.get('aggregate_sentiment_score', 'N/A') if news_data else 'N/A'
+            catalyst_info = ""
+            if news_data and news_data.get("catalyst_breakdown"):
+                catalyst_info = f"\n**催化劑分布**: {news_data['catalyst_breakdown']}"
+            return existing_report + (
+                f"\n\n---\n### 📰 市場新聞補充 (自動附加)\n"
+                f"**加權情緒分數**: {score}{catalyst_info}\n\n{news_summary}\n"
+            )
 
     def run_decision_summary(self,
                              username: str,
@@ -225,18 +329,18 @@ class Analyst:
             """
 
         try:
-            response = client.models.generate_content(
-                model=model_name,
-                contents=prompt
-            )
+            text = self._generate_with_fallback(client, prompt, model_name)
         except Exception as e:
-            fallback_model = "gemini-2.5-flash"
-            logger.warning(f"使用 {model_name} 失敗: {e}，自動切換至 {fallback_model}")
-            response = client.models.generate_content(
-                model=fallback_model,
-                contents=prompt
-            )
-        text = response.text
+            logger.error(f"Decision Summary 最終失敗: {e}")
+            return {
+                "trend": "未知",
+                "recommendation": "觀望",
+                "entry_price": 0,
+                "exit_price": 0,
+                "stop_loss": 0,
+                "confidence_score": 0,
+                "personalized_note": f"系統忙碌中，決策失敗: {e}"
+            }
 
         match = re.search(r'---DECISION_SUMMARY---(.*?)---END_SUMMARY---', text, re.DOTALL)
         if match:

@@ -68,6 +68,45 @@ def _cached_get_latest_prices(tickers: tuple):
     from dataprocess import get_latest_prices
     return get_latest_prices(list(tickers))
 
+# --- 分析流程共用管線 ---
+
+def _run_analysis_pipeline(analyst, archive, portfolio_mgr, fig,
+                           username, ticker, distilled, current_p, prev_close_p,
+                           holding_metrics, summary, as_of_str, api_key):
+    """
+    Phase 1 AI 分析管線 (共用邏輯)：
+    計算持倉權重 → 匯出圖表 → 深度分析 → 決策摘要 → 存儲 → 觸發 Phase 2
+    由「啟動 AI 分析」與「重新生成分析」共用，消除程式碼重複。
+    """
+    with st.spinner("AI 視覺與數據分析中..."):
+        # 重用已計算的 holding_metrics，避免重複 calculate_metrics + JSON I/O
+        p_metrics = dict(holding_metrics)
+        total_mv = summary.get('total_market_value', 0)
+        if total_mv > 0 and p_metrics.get('market_value', 0) > 0:
+            p_metrics['weight_pct'] = round(
+                (p_metrics['market_value'] / total_mv) * 100, 2)
+        else:
+            p_metrics['weight_pct'] = 0.0
+
+        temp_dir = Path(tempfile.gettempdir())
+        img_path = temp_dir / f"{ticker}_chart.png"
+        fig.write_image(str(img_path))
+
+        report = analyst.run_deep_analysis(
+            username, ticker, distilled, p_metrics,
+            image_path=img_path, api_key=api_key)
+        archive.save_text(username, "reports", "analysis_report.md", report,
+                          ticker=ticker, date=as_of_str)
+
+        decision = analyst.run_decision_summary(
+            username, report, portfolio_data=p_metrics, api_key=api_key)
+        archive.save_json(username, "reports", "decision_summary", decision,
+                          ticker=ticker, date=as_of_str)
+
+        st.session_state.run_phase_2_for = ticker
+        st.session_state.phase_2_done = False
+        st.rerun()
+
 
 # --- 主渲染函式 ---
 
@@ -183,54 +222,21 @@ def render_market_dashboard(archive, portfolio_mgr, analyst, period, show_ma, sh
                     if not api_key:
                         st.error("未提供 API Key，請在「個人策略設定」輸入，或於 .env 設定 GEMINI_API_KEY。")
                     else:
-                        with st.spinner("AI 視覺與數據分析中..."):
-                            p_metrics = portfolio_mgr.calculate_metrics(username, ticker, current_p, prev_close_p)
-                            if summary.get('total_market_value', 0) > 0 and p_metrics.get('market_value', 0) > 0:
-                                p_metrics['weight_pct'] = round(
-                                    (p_metrics.get('market_value', 0) / summary['total_market_value']) * 100, 2)
-                            else:
-                                p_metrics['weight_pct'] = 0.0
-                            temp_dir = Path(tempfile.gettempdir())
-                            img_path = temp_dir / f"{ticker}_chart.png"
-                            fig.write_image(str(img_path))
-                            report = analyst.run_deep_analysis(
-                                username, ticker, distilled, p_metrics, image_path=img_path, api_key=api_key)
-                            archive.save_text(username, "reports", "analysis_report.md", report,
-                                              ticker=ticker, date=as_of_str)
-                            decision = analyst.run_decision_summary(
-                                username, report, portfolio_data=p_metrics, api_key=api_key)
-                            archive.save_json(username, "reports", "decision_summary", decision,
-                                              ticker=ticker, date=as_of_str)
-                            
-                            st.session_state.run_phase_2_for = ticker
-                            st.session_state.phase_2_done = False
-                            st.rerun()
+                        _run_analysis_pipeline(
+                            analyst, archive, portfolio_mgr, fig,
+                            username, ticker, distilled, current_p, prev_close_p,
+                            holding_metrics, summary, as_of_str, api_key
+                        )
 
             if a_regen.button("🔄 重新生成分析", use_container_width=True):
                 if not api_key:
                     st.error("未提供 API Key。")
                 else:
-                    with st.spinner("重新生成視覺與數據分析中..."):
-                        p_metrics = portfolio_mgr.calculate_metrics(username, ticker, current_p, prev_close_p)
-                        if summary.get('total_market_value', 0) > 0 and p_metrics.get('market_value', 0) > 0:
-                            p_metrics['weight_pct'] = round(
-                                (p_metrics.get('market_value', 0) / summary['total_market_value']) * 100, 2)
-                        else:
-                            p_metrics['weight_pct'] = 0.0
-                        temp_dir = Path(tempfile.gettempdir())
-                        img_path = temp_dir / f"{ticker}_chart.png"
-                        fig.write_image(str(img_path))
-                        report = analyst.run_deep_analysis(
-                            username, ticker, distilled, p_metrics, image_path=img_path, api_key=api_key)
-                        archive.save_text(username, "reports", "analysis_report.md", report,
-                                          ticker=ticker, date=as_of_str)
-                        decision = analyst.run_decision_summary(
-                            username, report, portfolio_data=p_metrics, api_key=api_key)
-                        archive.save_json(username, "reports", "decision_summary", decision,
-                                          ticker=ticker, date=as_of_str)
-                        st.session_state.run_phase_2_for = ticker
-                        st.session_state.phase_2_done = False
-                        st.rerun()
+                    _run_analysis_pipeline(
+                        analyst, archive, portfolio_mgr, fig,
+                        username, ticker, distilled, current_p, prev_close_p,
+                        holding_metrics, summary, as_of_str, api_key
+                    )
 
             if a_history.button("📂 歷史分析報告", use_container_width=True):
                 st.session_state.view_history = not st.session_state.view_history
@@ -266,44 +272,42 @@ def render_market_dashboard(archive, portfolio_mgr, analyst, period, show_ma, sh
                 st.markdown(f"### 📄 深度分析報告 ({target_date})")
                 st.markdown(report_md)
 
-            # --- Phase 2: 新聞分析與綜合決策背景執行 ---
+            # --- Phase 2: 新聞增量整合 (輕量級，無需重跑完整分析) ---
             if target_date == as_of_str and st.session_state.run_phase_2_for == ticker and not st.session_state.phase_2_done:
                 st.divider()
-                st.info("💡 **階段一技術分析已完成！** 即將為您呈現結合市場情緒的高階決策...")
-                with st.spinner(f"正在背景掃描 {ticker} 或大盤新聞，由本地代理人進行綜合事件蒸餾..."):
+                st.info("💡 **階段一技術分析已完成！** 即將整合市場新聞情緒進行增補決策...")
+                with st.spinner(f"正在掃描 {ticker} 新聞，由本地代理人進行情緒蒸餾與報告增補..."):
                     try:
-                        p_metrics = portfolio_mgr.calculate_metrics(username, ticker, current_p, prev_close_p)
-                        if summary.get('total_market_value', 0) > 0 and p_metrics.get('market_value', 0) > 0:
+                        # 1. 擷取新聞並蒸餾
+                        news_json = fetch_news_and_distill(ticker, username, archive, api_key=api_key)
+
+                        # 2. 輕量級增補：將新聞整合到既有 Phase 1 報告
+                        #    (無需重新上傳圖片、無需重跑完整分析)
+                        report_phase2 = analyst.run_news_augmentation(
+                            username, ticker, report_md, news_data=news_json, api_key=api_key)
+
+                        archive.save_text(username, "reports", "analysis_report.md", report_phase2,
+                                          ticker=ticker, date=as_of_str)
+
+                        # 3. 基於增補報告更新決策摘要 (重用已計算的 holding_metrics)
+                        p_metrics = dict(holding_metrics)  # 淺拷貝避免汙染顯示用數據
+                        total_mv = summary.get('total_market_value', 0)
+                        if total_mv > 0 and p_metrics.get('market_value', 0) > 0:
                             p_metrics['weight_pct'] = round(
-                                (p_metrics.get('market_value', 0) / summary['total_market_value']) * 100, 2)
+                                (p_metrics['market_value'] / total_mv) * 100, 2)
                         else:
                             p_metrics['weight_pct'] = 0.0
 
-                        temp_dir = Path(tempfile.gettempdir())
-                        img_path = temp_dir / f"{ticker}_chart.png"
-                        if not img_path.exists():
-                            fig.write_image(str(img_path))
-                    
-                        # 擷取新聞並蒸餾 (本地 LLM 模擬)
-                        news_json = fetch_news_and_distill(ticker, username, archive, api_key=api_key)
-                        
-                        # 結合新聞重新生成
-                        report_phase2 = analyst.run_deep_analysis(
-                            username, ticker, distilled, p_metrics, image_path=img_path, api_key=api_key, news_data=news_json)
-                        
-                        archive.save_text(username, "reports", "analysis_report.md", report_phase2,
-                                          ticker=ticker, date=as_of_str)
-                        
                         decision_phase2 = analyst.run_decision_summary(
                             username, report_phase2, portfolio_data=p_metrics, api_key=api_key)
-                        
+
                         archive.save_json(username, "reports", "decision_summary", decision_phase2,
                                           ticker=ticker, date=as_of_str)
                     except Exception as e:
                         import logging
                         logging.getLogger(__name__).error(f"Phase 2 執行失敗: {e}")
-                        st.error(f"階段二綜合決策處理中斷: {e}")
-                    
+                        st.error(f"階段二新聞整合中斷: {e}")
+
                     st.session_state.phase_2_done = True
                     st.session_state.run_phase_2_for = None
                     st.rerun()
