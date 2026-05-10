@@ -14,6 +14,14 @@ from dotenv import load_dotenv
 # 自動載入 .env 中的環境變數 (包括 GEMINI_API_KEY)
 load_dotenv(dotenv_path=Path(__file__).parent / ".env", override=False)
 
+# 雲端部署：從 Streamlit Secrets 注入 API Key 到環境變數
+# 本地開發時無 secrets.toml，FileNotFoundError 會被靜默忽略
+try:
+    if "GEMINI_API_KEY" in st.secrets:
+        os.environ.setdefault("GEMINI_API_KEY", st.secrets["GEMINI_API_KEY"])
+except FileNotFoundError:
+    pass
+
 # 載入自定義模組
 from utils.archive import ArchiveManager, get_archive, hash_password, verify_password
 from utils.portfolio import PortfolioManager

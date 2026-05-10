@@ -234,13 +234,21 @@ def fetch_news_and_distill(ticker: str, username: str, archive: ArchiveManager, 
 
     # 進入 Async 迴圈跑 Local Inference
     client = LocalInferenceClient(api_key=api_key)
-    try:
-        loop = asyncio.get_event_loop()
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
 
-    result_json = loop.run_until_complete(client.distill_news_batch(ticker, source_type, top_news))
+    # 雲端相容：Streamlit Cloud 的 tornado 已佔用 event loop，
+    # 用獨立執行緒建立新迴圈，在本地與雲端環境皆安全
+    import concurrent.futures
+
+    def _run_in_thread():
+        new_loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(new_loop)
+        try:
+            return new_loop.run_until_complete(client.distill_news_batch(ticker, source_type, top_news))
+        finally:
+            new_loop.close()
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+        result_json = executor.submit(_run_in_thread).result()
 
     # 存入快取: storage/users/{username}/news_cache/{ticker}_{YYYYMMDD}.json
     today_str = datetime.now().strftime("%Y-%m-%d")
