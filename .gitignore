@@ -14,6 +14,10 @@ storage/
 
 # 舊版本數據資料
 historical_code_dont_modify/
+
+# Streamlit secrets (避免本地金鑰外流)
+.streamlit/secrets.toml
+
 # 敏感金鑰檔案
 config.json
 test_dataprocess.py

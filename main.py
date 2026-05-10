@@ -15,11 +15,11 @@ from dotenv import load_dotenv
 load_dotenv(dotenv_path=Path(__file__).parent / ".env", override=False)
 
 # 雲端部署：從 Streamlit Secrets 注入 API Key 到環境變數
-# 本地開發時無 secrets.toml，FileNotFoundError 會被靜默忽略
+# 本地開發時無 secrets.toml，任何讀取錯誤皆被靜默忽略
 try:
     if "GEMINI_API_KEY" in st.secrets:
-        os.environ.setdefault("GEMINI_API_KEY", st.secrets["GEMINI_API_KEY"])
-except FileNotFoundError:
+        os.environ["GEMINI_API_KEY"] = st.secrets["GEMINI_API_KEY"]
+except Exception:
     pass
 
 # 載入自定義模組
