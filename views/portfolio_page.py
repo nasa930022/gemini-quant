@@ -71,22 +71,39 @@ def render_portfolio_management(archive, portfolio_mgr, analyst=None):
             preview_df = pd.DataFrame(st.session_state["parsed_portfolio"])
             st.dataframe(preview_df, use_container_width=True)
             
-            if st.button("✅ 確認寫入所有紀錄 (以今日為購買日)", type="primary"):
-                today_str = datetime.now().strftime("%Y-%m-%d")
+            if st.button("✅ 確認寫入所有紀錄", type="primary"):
+                # 如果沒有明確日期 (如庫存總覽)，預設為「前一天」，避免使用到還未收盤的當天導致資料錯誤
+                from datetime import timedelta
+                yesterday_str = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+                
                 count = 0
                 for row in st.session_state["parsed_portfolio"]:
                     ticker = str(row.get("ticker", "")).upper()
-                    price = float(row.get("price", 0))
-                    shares = float(row.get("shares", 0))
+                    
+                    # 處理欄位可能是 None 的狀況
+                    try:
+                        price = float(row.get("price") or 0)
+                        shares = float(row.get("shares") or 0)
+                    except ValueError:
+                        continue
                     
                     if ticker and price > 0 and shares > 0:
+                        # 處理彈性格式
+                        tx_date = row.get("date")
+                        if not tx_date or str(tx_date).strip().lower() == "null":
+                            tx_date = yesterday_str
+                            
+                        tx_type = row.get("type")
+                        if not tx_type or str(tx_type).strip().lower() not in ["buy", "sell"]:
+                            tx_type = "buy"  # 預設為買進
+                            
                         portfolio_mgr.add_transaction(
-                            username, ticker, "buy", today_str, price, shares
+                            username, ticker, tx_type, tx_date, price, shares
                         )
                         count += 1
                 
                 st.session_state.pop("parsed_portfolio")
-                st.success(f"成功大量寫入 {count} 筆紀錄！")
+                st.success(f"成功寫入 {count} 筆交易紀錄！")
                 st.rerun()
         elif "parsed_portfolio" in st.session_state and not st.session_state["parsed_portfolio"]:
              st.warning("找不到任何符合的股票紀錄，請確認圖片或文字內容。")
