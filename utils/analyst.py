@@ -347,3 +347,79 @@ class Analyst:
             json_str = match.group(1).strip().replace("```json", "").replace("```", "")
             return json.loads(json_str)
         raise ValueError("無法解析決策 JSON。")
+
+    def parse_portfolio_image(self, image_bytes: bytes, mime_type: str, api_key: Optional[str] = None) -> list[dict]:
+        """使用 Gemini 視覺模型解析券商持股截圖。"""
+        client = self._get_client(api_key)
+        model_name = "gemini-2.5-flash"  # 使用較穩定的 2.5-flash 處理圖像與結構化資料
+
+        prompt = """
+        任務：解析這張券商投資組合截圖，擷取所有持股資訊。
+        請忽略現金餘額或非股票/ETF的項目。
+        
+        輸出要求：
+        請回傳一個嚴格的 JSON 陣列 (Array)，陣列中包含多個物件，每個物件代表一檔股票。
+        每個物件必須包含以下三個鍵 (Key)：
+        - "ticker" (字串)：股票代碼 (必須是大寫英文字母，如 AAPL, TSLA)
+        - "price" (數字)：平均成本 (請過濾掉幣別符號與逗號)
+        - "shares" (數字)：持股數量 (請過濾掉逗號)
+        
+        如果找不到任何股票資訊，請回傳空陣列 []。
+        請只回傳 JSON 字串，不要加上 ```json 或任何多餘的說明。
+        """
+        
+        contents = [
+            types.Part.from_bytes(data=image_bytes, mime_type=mime_type),
+            prompt
+        ]
+        
+        try:
+            text = self._generate_with_fallback(client, contents, model_name)
+            # 簡單清理可能存在的 markdown 包裝
+            cleaned = text.strip()
+            if cleaned.startswith("```"):
+                cleaned = cleaned.split("\n", 1)[-1].rsplit("```", 1)[0]
+            
+            result = json.loads(cleaned.strip())
+            if isinstance(result, list):
+                return result
+            return []
+        except Exception as e:
+            logger.error(f"Image parsing failed: {e}")
+            raise ValueError(f"無法解析圖片：{str(e)}")
+
+    def parse_portfolio_text(self, text_data: str, api_key: Optional[str] = None) -> list[dict]:
+        """使用 Gemini 解析非結構化或雜亂的文字投資組合資料。"""
+        client = self._get_client(api_key)
+        model_name = "gemini-2.5-flash-lite"
+        
+        prompt = f"""
+        任務：從以下使用者貼上的文字中，擷取所有投資組合持股資訊。
+        
+        輸入文字：
+        {text_data}
+        
+        輸出要求：
+        請回傳一個嚴格的 JSON 陣列 (Array)，每個物件代表一檔股票。
+        每個物件必須包含以下三個鍵：
+        - "ticker" (字串)：股票代碼 (必須是大寫英文字母)
+        - "price" (數字)：平均成本
+        - "shares" (數字)：持股數量
+        
+        如果資料不足或無法判斷，請盡可能推測，若完全找不到股票則回傳 []。
+        請只回傳 JSON 字串，不要加上 ```json 等標籤。
+        """
+        
+        try:
+            text = self._generate_with_fallback(client, prompt, model_name)
+            cleaned = text.strip()
+            if cleaned.startswith("```"):
+                cleaned = cleaned.split("\n", 1)[-1].rsplit("```", 1)[0]
+                
+            result = json.loads(cleaned.strip())
+            if isinstance(result, list):
+                return result
+            return []
+        except Exception as e:
+            logger.error(f"Text parsing failed: {e}")
+            raise ValueError(f"無法解析文字：{str(e)}")

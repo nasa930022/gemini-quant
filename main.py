@@ -156,6 +156,6 @@ if choice == "市場看盤":
 elif choice == "個人策略設定":
     render_strategy_settings(_ARCHIVE)
 elif choice == "投資組合管理":
-    render_portfolio_management(_ARCHIVE, _PM)
+    render_portfolio_management(_ARCHIVE, _PM, _ANALYST)
 
 
